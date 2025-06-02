@@ -1,0 +1,179 @@
+---
+title: "Test 2"
+author: "Yung"
+date: "6/2/2025"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Load libraries
+library(caret)
+library(ggplot2)
+library(corrplot)
+library(randomForest)
+
+# Load data
+trainData <- read.csv("pml-training.csv")
+testData <- read.csv("pml-testing.csv")
+summary(trainData)
+
+# Univariate Feature Selection using ANOVA
+
+# Store the p-values
+p_values <- numeric(ncol(numeric_data))
+names(p_values) <- names(numeric_data)
+
+# Perform ANOVA for each numeric variable
+for (i in 1:ncol(numeric_data)) {
+  # Create a linear model
+  model <- lm(numeric_data[, i] ~ trainData$classe)
+  # Perform ANOVA
+  anova_result <- anova(model)
+  # Store the p-value
+  p_values[i] <- anova_result$"Pr(>F)"[1]
+}
+
+# Sort variables by p-value (ascending order)
+sorted_p_values <- sort(p_values)
+
+# Select top N variables based on p-values (e.g., top 20)
+N <- 20
+selected_variables_anova <- names(sorted_p_values)[1:N]
+
+# Print selected variables
+print(selected_variables_anova)
+
+# Perform PCA
+pca_result <- prcomp(numeric_data, scale. = TRUE)
+
+# Scree plot
+plot(pca_result, type = "l", main = "Scree Plot")
+
+# Get the principal component scores
+pca_scores <- as.data.frame(pca_result$x)
+
+# Add the 'classe' variable to the PCA scores for visualization
+pca_scores$classe <- trainData$classe
+# Scatter plot of the first two principal components, colored by classe
+ggplot(pca_scores, aes(x = PC1, y = PC2, color = classe)) +
+    geom_point() +
+    ggtitle("PCA: First Two Principal Components") +
+    theme_minimal()
+    
+# 1. Prepare Datasets
+
+# Full Dataset (already have trainData)
+
+# ANOVA Dataset
+trainData_anova <- trainData[, c(selected_variables_anova, "classe")]
+
+# PCA Dataset (using first 20 PCs)
+trainData_pca <- pca_scores[, c(paste0("PC", 1:20), "classe")]
+
+# 2. Set up trainControl
+
+# Define cross-validation method (10-fold CV)
+train_control <- trainControl(method = "cv", number = 10)
+
+# 3. Train and Tune Models
+
+# --- Random Forest (rf) ---
+
+# Define tuning grid for mtry
+rf_tuneGrid <- expand.grid(mtry = c(2, 3, 5, 7, 9))
+
+# Train RF on Full Dataset
+set.seed(123)
+rf_full <- train(classe ~ ., data = trainData, method = "rf", trControl = train_control, tuneGrid = rf_tuneGrid)
+
+# Train RF on ANOVA Dataset
+set.seed(123)
+rf_anova <- train(classe ~ ., data = trainData_anova, method = "rf", trControl = train_control, tuneGrid = rf_tuneGrid)
+
+# Train RF on PCA Dataset
+set.seed(123)
+rf_pca <- train(classe ~ ., data = trainData_pca, method = "rf", trControl = train_control, tuneGrid = rf_tuneGrid)
+
+# --- Gradient Boosting Machine (gbm) ---
+
+# Define tuning grid for GBM parameters
+gbm_tuneGrid <- expand.grid(
+  n.trees = c(100, 200, 300),           # Number of trees
+  interaction.depth = c(1, 2, 3),     # Tree depth
+  shrinkage = c(0.01, 0.1),             # Learning rate
+  n.minobsinnode = c(5, 10)           # Minimum observations in terminal nodes
+)
+
+# Train GBM on Full Dataset
+set.seed(123)
+gbm_full <- train(classe ~ ., data = trainData, method = "gbm", trControl = train_control, tuneGrid = gbm_tuneGrid, verbose = FALSE)
+
+# Train GBM on ANOVA Dataset
+set.seed(123)
+gbm_anova <- train(classe ~ ., data = trainData_anova, method = "gbm", trControl = train_control, tuneGrid = gbm_tuneGrid, verbose = FALSE)
+
+# Train GBM on PCA Dataset
+set.seed(123)
+gbm_pca <- train(classe ~ ., data = trainData_pca, method = "gbm", trControl = train_control, tuneGrid = gbm_tuneGrid, verbose = FALSE)
+
+# 4. Evaluate Performance
+
+# Create a function to extract performance metrics
+get_performance <- function(model) {
+  best_tune <- model$bestTune
+  performance <- model$results[which.max(model$results$Accuracy), ]
+  return(performance)
+}
+
+# Get performance for each model and dataset
+rf_full_performance <- get_performance(rf_full)
+rf_anova_performance <- get_performance(rf_anova)
+rf_pca_performance <- get_performance(rf_pca)
+
+gbm_full_performance <- get_performance(gbm_full)
+gbm_anova_performance <- get_performance(gbm_anova)
+gbm_pca_performance <- get_performance(gbm_pca)
+
+# 5. Compare Performance
+
+# Create a data frame to store the results
+performance_summary <- data.frame(
+  Model = c("Random Forest", "Random Forest", "Random Forest", "GBM", "GBM", "GBM"),
+  Dataset = c("Full", "ANOVA", "PCA", "Full", "ANOVA", "PCA"),
+  Accuracy = c(rf_full_performance$Accuracy, rf_anova_performance$Accuracy, rf_pca_performance$Accuracy,
+               gbm_full_performance$Accuracy, gbm_anova_performance$Accuracy, gbm_pca_performance$Accuracy),
+  Kappa = c(rf_full_performance$Kappa, rf_anova_performance$Kappa, rf_pca_performance$Kappa,
+            gbm_full_performance$Kappa, gbm_anova_performance$Kappa, gbm_pca_performance$Kappa)
+)
+print(performance_summary)
+# Visualize performance comparison
+comparison_plot <- ggplot(performance_summary, aes(x = Dataset, y = Accuracy, fill = Model)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  ggtitle("Model Performance Comparison") +
+  theme_minimal()
+
+# Display the plot using print()
+print(comparison_plot)
+
+# --- Final Model Training and Test Set Prediction ---
+
+# 1. Train Final Random Forest Model on the Entire Training Dataset
+
+# Get the best mtry value from the cross-validation results of rf_full
+best_mtry <- rf_full$bestTune$mtry
+
+# Train the final Random Forest model on the entire training set
+set.seed(123)  # For reproducibility
+final_rf_model <- randomForest(classe ~ ., data = trainData, mtry = best_mtry)
+
+# 3. Make Predictions on the Test Set
+
+# Make predictions using the final Random Forest model
+final_predictions <- predict(final_rf_model, newdata = testData)
+
+# 4. Format Predictions
+
+# Print the predictions
+print(final_predictions)
